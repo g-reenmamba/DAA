@@ -1,0 +1,362 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, simpledialog
+import math
+import heapq
+from collections import defaultdict, deque
+import time
+import threading
+
+
+class DijkstraVisualizer:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Dijkstra's Algorithm Visualizer")
+        self.root.geometry("1200x800")
+
+        self.nodes = {}
+        self.edges = []
+        self.graph = defaultdict(list)
+
+
+        self.node_counter = 0
+        self.start_node = None
+        self.end_node = None
+        self.selected_node = None
+        self.dragging_edge = False
+        self.temp_edge = None
+
+
+        self.distances = {}
+        self.previous = {}
+        self.visited = set()
+        self.current_node = None
+        self.algorithm_running = False
+        self.animation_speed = 1.0
+
+
+        self.colors = {
+            'unvisited': '#E0E0E0',
+            'current': '#FFD700',
+            'visited': '#87CEEB',
+            'start': '#90EE90',
+            'end': '#FF6B6B',
+            'path': '#FF4444',
+            'edge': '#808080',
+            'edge_active': '#FF8C00'
+        }
+
+        self.setup_ui()
+
+    def setup_ui(self):
+
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+
+        control_frame = ttk.LabelFrame(main_frame, text="Controls", padding=10)
+        control_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+
+
+        ttk.Button(control_frame, text="Add Node", command=self.toggle_add_node).pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="Add Edge", command=self.toggle_add_edge).pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="Set Start", command=self.set_start_mode).pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="Set End", command=self.set_end_mode).pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="Run Dijkstra", command=self.run_dijkstra).pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="Clear All", command=self.clear_all).pack(side=tk.LEFT, padx=5)
+
+
+        ttk.Label(control_frame, text="Speed:").pack(side=tk.LEFT, padx=(20, 5))
+        self.speed_var = tk.DoubleVar(value=1.0)
+        speed_scale = ttk.Scale(control_frame, from_=0.1, to=3.0, variable=self.speed_var, length=100)
+        speed_scale.pack(side=tk.LEFT, padx=5)
+
+
+        self.status_var = tk.StringVar(value="Click 'Add Node' and click on canvas to add nodes")
+        ttk.Label(control_frame, textvariable=self.status_var).pack(side=tk.RIGHT, padx=10)
+
+
+        canvas_frame = ttk.LabelFrame(main_frame, text="Graph Visualization", padding=5)
+        canvas_frame.pack(fill=tk.BOTH, expand=True)
+
+
+        self.canvas = tk.Canvas(canvas_frame, bg='white', cursor='arrow')
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+
+        info_frame = ttk.LabelFrame(main_frame, text="Algorithm Info", padding=10)
+        info_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
+
+        self.info_text = tk.Text(info_frame, height=6, wrap=tk.WORD)
+        scrollbar = ttk.Scrollbar(info_frame, orient=tk.VERTICAL, command=self.info_text.yview)
+        self.info_text.configure(yscrollcommand=scrollbar.set)
+        self.info_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+
+        self.mode = None
+        self.canvas.bind('<Button-1>', self.on_canvas_click)
+        self.canvas.bind('<B1-Motion>', self.on_canvas_drag)
+        self.canvas.bind('<ButtonRelease-1>', self.on_canvas_release)
+
+    def toggle_add_node(self):
+        self.mode = 'add_node'
+        self.canvas.config(cursor='crosshair')
+        self.status_var.set("Click on canvas to add nodes")
+
+    def toggle_add_edge(self):
+        self.mode = 'add_edge'
+        self.canvas.config(cursor='hand2')
+        self.status_var.set("Click and drag between nodes to add edges")
+
+    def set_start_mode(self):
+        self.mode = 'set_start'
+        self.canvas.config(cursor='target')
+        self.status_var.set("Click on a node to set as start")
+
+    def set_end_mode(self):
+        self.mode = 'set_end'
+        self.canvas.config(cursor='target')
+        self.status_var.set("Click on a node to set as end")
+
+    def on_canvas_click(self, event):
+        if self.algorithm_running:
+            return
+
+        x, y = event.x, event.y
+        clicked_node = self.get_node_at_position(x, y)
+
+        if self.mode == 'add_node':
+            if not clicked_node:
+                self.add_node(x, y)
+
+        elif self.mode == 'add_edge':
+            if clicked_node:
+                self.selected_node = clicked_node
+                self.dragging_edge = True
+
+        elif self.mode == 'set_start':
+            if clicked_node:
+                self.start_node = clicked_node
+                self.update_display()
+                self.status_var.set(f"Start node set to {clicked_node}")
+
+        elif self.mode == 'set_end':
+            if clicked_node:
+                self.end_node = clicked_node
+                self.update_display()
+                self.status_var.set(f"End node set to {clicked_node}")
+
+    def on_canvas_drag(self, event):
+        if self.dragging_edge and self.selected_node:
+            self.canvas.delete("temp_edge")
+            start_x, start_y = self.nodes[self.selected_node]
+            self.temp_edge = self.canvas.create_line(
+                start_x, start_y, event.x, event.y,
+                fill='red', width=2, tags="temp_edge"
+            )
+
+    def on_canvas_release(self, event):
+        if self.dragging_edge:
+            target_node = self.get_node_at_position(event.x, event.y)
+            if target_node and target_node != self.selected_node:
+                self.add_edge(self.selected_node, target_node)
+            self.canvas.delete("temp_edge")
+            self.dragging_edge = False
+            self.selected_node = None
+
+    def get_node_at_position(self, x, y):
+        for node_id, (nx, ny) in self.nodes.items():
+            distance = math.sqrt((x - nx) ** 2 + (y - ny) ** 2)
+            if distance <= 20:
+                return node_id
+        return None
+
+    def add_node(self, x, y):
+        node_id = chr(65 + self.node_counter)  # A, B, C, ...
+        self.node_counter += 1
+        self.nodes[node_id] = (x, y)
+        self.update_display()
+        self.status_var.set(f"Added node {node_id}")
+
+    def add_edge(self, node1, node2):
+
+        for edge in self.edges:
+            if (edge[0] == node1 and edge[1] == node2) or (edge[0] == node2 and edge[1] == node1):
+                messagebox.showwarning("Warning", "Edge already exists!")
+                return
+
+
+        weight = simpledialog.askfloat("Edge Weight", f"Enter weight for edge {node1}-{node2}:", minvalue=0.1)
+        if weight is not None:
+            self.edges.append((node1, node2, weight))
+
+            self.graph[node1].append((node2, weight))
+            self.graph[node2].append((node1, weight))
+            self.update_display()
+            self.status_var.set(f"Added edge {node1}-{node2} with weight {weight}")
+
+    def update_display(self):
+        self.canvas.delete("all")
+
+
+        for node1, node2, weight in self.edges:
+            x1, y1 = self.nodes[node1]
+            x2, y2 = self.nodes[node2]
+
+            color = self.colors['edge']
+            width = 2
+
+            self.canvas.create_line(x1, y1, x2, y2, fill=color, width=width)
+
+
+            mid_x, mid_y = (x1 + x2) / 2, (y1 + y2) / 2
+            self.canvas.create_text(mid_x, mid_y, text=str(weight), fill='black',
+                                    font=('Arial', 10, 'bold'), tags="weight")
+
+
+        for node_id, (x, y) in self.nodes.items():
+            color = self.colors['unvisited']
+
+            if node_id == self.start_node:
+                color = self.colors['start']
+            elif node_id == self.end_node:
+                color = self.colors['end']
+            elif node_id == self.current_node:
+                color = self.colors['current']
+            elif node_id in self.visited:
+                color = self.colors['visited']
+
+            self.canvas.create_oval(x - 20, y - 20, x + 20, y + 20, fill=color, outline='black', width=2)
+            self.canvas.create_text(x, y, text=node_id, font=('Arial', 12, 'bold'))
+
+
+            if node_id in self.distances:
+                dist_text = f"d={self.distances[node_id]}" if self.distances[node_id] != float('inf') else "d=∞"
+                self.canvas.create_text(x, y - 35, text=dist_text, font=('Arial', 9), fill='red')
+
+    def run_dijkstra(self):
+        if not self.start_node or not self.end_node:
+            messagebox.showwarning("Warning", "Please set both start and end nodes!")
+            return
+
+        if self.algorithm_running:
+            return
+
+
+        self.distances = {}
+        self.previous = {}
+        self.visited = set()
+        self.current_node = None
+
+
+        self.algorithm_running = True
+        thread = threading.Thread(target=self.dijkstra_algorithm)
+        thread.daemon = True
+        thread.start()
+
+    def dijkstra_algorithm(self):
+
+        for node in self.nodes:
+            self.distances[node] = float('inf')
+            self.previous[node] = None
+
+        self.distances[self.start_node] = 0
+        pq = [(0, self.start_node)]
+
+        self.update_info(f"Starting Dijkstra's algorithm from {self.start_node} to {self.end_node}\n")
+        self.update_info(f"Initial distances: {dict(self.distances)}\n\n")
+
+        step = 1
+        while pq:
+            current_dist, current = heapq.heappop(pq)
+
+            if current in self.visited:
+                continue
+
+            self.current_node = current
+            self.visited.add(current)
+
+
+            self.root.after(0, self.update_display)
+
+            self.update_info(f"Step {step}: Visiting node {current} (distance: {current_dist})\n")
+
+            if current == self.end_node:
+                self.update_info(f"Reached destination! Shortest path found.\n")
+                break
+
+
+            for neighbor, weight in self.graph[current]:
+                if neighbor not in self.visited:
+                    new_dist = current_dist + weight
+
+                    if new_dist < self.distances[neighbor]:
+                        self.distances[neighbor] = new_dist
+                        self.previous[neighbor] = current
+                        heapq.heappush(pq, (new_dist, neighbor))
+
+                        self.update_info(f"  Updated {neighbor}: distance = {new_dist} (via {current})\n")
+
+            step += 1
+            time.sleep(2.0 / self.speed_var.get())  # Animation delay
+
+
+        self.show_shortest_path()
+        self.algorithm_running = False
+        self.current_node = None
+        self.root.after(0, self.update_display)
+
+    def show_shortest_path(self):
+        if self.end_node not in self.distances or self.distances[self.end_node] == float('inf'):
+            self.update_info("No path found!\n")
+            return
+
+
+        path = []
+        current = self.end_node
+        while current is not None:
+            path.append(current)
+            current = self.previous[current]
+        path.reverse()
+
+        self.update_info(f"\nShortest path: {' → '.join(path)}\n")
+        self.update_info(f"Total distance: {self.distances[self.end_node]}\n")
+
+
+        for i in range(len(path) - 1):
+            node1, node2 = path[i], path[i + 1]
+            x1, y1 = self.nodes[node1]
+            x2, y2 = self.nodes[node2]
+            self.canvas.create_line(x1, y1, x2, y2, fill=self.colors['path'], width=4)
+
+    def update_info(self, text):
+        def append_text():
+            self.info_text.insert(tk.END, text)
+            self.info_text.see(tk.END)
+
+        self.root.after(0, append_text)
+
+    def clear_all(self):
+        if self.algorithm_running:
+            return
+
+        self.nodes = {}
+        self.edges = []
+        self.graph = defaultdict(list)
+        self.node_counter = 0
+        self.start_node = None
+        self.end_node = None
+        self.distances = {}
+        self.previous = {}
+        self.visited = set()
+        self.current_node = None
+
+        self.canvas.delete("all")
+        self.info_text.delete(1.0, tk.END)
+        self.status_var.set("Graph cleared. Click 'Add Node' to start.")
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = DijkstraVisualizer(root)
+    root.mainloop()
